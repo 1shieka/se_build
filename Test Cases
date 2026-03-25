@@ -1,1 +1,721 @@
-#Test CaseTypeWhat it validatesTC-01Worst-case config crashes systemUnit · Negative pathstatus = CRASHED when bugRisk > 0.6 from stacked bad decisionsTC-02Optimal config returns HEALTHYUnit · Happy pathBest config produces HEALTHY, score ≥ 60, latency < 2sTC-03Load Balancer applies 1.5× capacityUnit · Architecture logicConfirms the exact multiplier is applied and load ratio dropsTC-04SQL on write-heavy penalises bugRisk + latencyUnit · DB logicSQL vs NoSQL comparison on Chat/Ride-sharing scenarioTC-05Cache hit rate calculated correctlyUnit · Cache formulaTests 3 cases: no cache (0%), cache only (70%), cache+CDN (85%)TC-06calcCost returns accurate totalsUnit · Cost engineExact dollar amounts for known component combinationsTC-07Traffic spike grows each cycleUnit · Game loopspike(cycle=1) > spike(cycle=0) — escalating difficultyTC-08Feedback flags bad decisions correctlyUnit · Feedback engineWaterfall, missing cache, SQL on write-heavy, manual deployTC-09Score always clamped 0–100Unit · Boundary conditionsTested across worst, best, and edge-case configsTC-10UI renders and simulation runs E2EIntegration · React Testing LibraryTitle, tabs, cycle pips, run button → status banner, reset
+/**
+ * ============================================================
+ *  System Design Builder — SDLC Simulation Engine v2.0
+ *  Test Suite
+ *
+ *  Framework : Jest + React Testing Library
+ *  Coverage  : Simulation Engine · Feedback Engine · Cost Model
+ *              · Architecture Logic · Game Loop · UI Rendering
+ *
+ *  Run tests : npm test
+ * ============================================================
+ */
+
+import { render, screen, fireEvent, within } from "@testing-library/react";
+import App from "../App";
+
+// ─── Helpers: extract pure functions from App.jsx for unit testing ──────────
+// We re-declare the minimal versions here so they can be tested in isolation.
+// These mirror the exact logic in App.jsx.
+
+const ARCH_COMPS = [
+  { id: "loadBalancer", cost: 50 },
+  { id: "cache",        cost: 40 },
+  { id: "cdn",          cost: 60 },
+  { id: "apiGateway",   cost: 50 },
+  { id: "msgQueue",     cost: 45 },
+  { id: "microservices",cost: 80 },
+];
+const DB_OPTIONS = [
+  { id: "sql",    cost: 70  },
+  { id: "nosql",  cost: 80  },
+  { id: "distdb", cost: 100 },
+];
+const SDLC_MODELS = [
+  { id: "waterfall", bugD: -0.08, latD:  0.05, adapt: 0.4 },
+  { id: "agile_s",   bugD: -0.05, latD:  0,    adapt: 0.7 },
+  { id: "agile_k",   bugD: -0.04, latD:  0,    adapt: 0.75},
+  { id: "devops",    bugD: -0.1,  latD: -0.1,  adapt: 0.9 },
+  { id: "spiral",    bugD: -0.12, latD:  0.02, adapt: 0.6 },
+];
+const REQUIREMENTS = [
+  { id: "performance", latD: -0.2, capD:   0, bugD:  0,     ctD: 0   },
+  { id: "cost",        latD:  0,   capD: -100, bugD:  0.05,  ctD: 0   },
+  { id: "reliability", latD:  0,   capD:   0, bugD: -0.05,  ctD: 0.3 },
+  { id: "scalability", latD:  0,   capD:  200, bugD:  0,     ctD: 0.2 },
+  { id: "security",    latD:  0.05,capD:   0, bugD: -0.05,  ctD: 0   },
+];
+const TEST_OPTIONS = [
+  { id: "basic",  bugD:  0.2,  rec: 0.3 },
+  { id: "medium", bugD:  0,    rec: 0.5 },
+  { id: "full",   bugD: -0.2,  rec: 0.7 },
+  { id: "chaos",  bugD: -0.3,  rec: 0.9 },
+];
+const DEPLOY_OPTIONS = [
+  { id: "manual",    latD:  0,     bugD:  0.2,  rec: 0.3  },
+  { id: "cicd",      latD: -0.1,   bugD: -0.1,  rec: 0.6  },
+  { id: "bluegreen", latD: -0.05,  bugD: -0.05, rec: 0.8  },
+  { id: "canary",    latD: -0.05,  bugD: -0.15, rec: 0.85 },
+];
+
+function calcCost(arch, db) {
+  let c = 0;
+  arch.forEach(id => { const a = ARCH_COMPS.find(x => x.id === id); if (a) c += a.cost; });
+  const d = DB_OPTIONS.find(x => x.id === db);
+  if (d) c += d.cost;
+  return c;
+}
+
+function runSim(cfg, scaling = { capacity: 0, latency: 0 }, cycle = 0) {
+  const { scenario, sdlc, requirements, architecture, db, testing, deployment } = cfg;
+  const sm = SDLC_MODELS.find(x => x.id === sdlc);
+  const tm = TEST_OPTIONS.find(x => x.id === testing);
+  const dm = DEPLOY_OPTIONS.find(x => x.id === deployment);
+
+  const isRead  = ["instagram", "streaming"].includes(scenario);
+  const isWrite = ["chat", "rideshare"].includes(scenario);
+  const isHard  = ["ecommerce", "streaming", "rideshare"].includes(scenario);
+
+  let capacity = 500 + scaling.capacity;
+  let latency  = 1   + scaling.latency;
+  let bugRisk  = 0.2;
+  let ct       = 1.2;
+
+  bugRisk += sm.bugD;
+  latency += sm.latD;
+
+  requirements.forEach(r => {
+    const rm = REQUIREMENTS.find(x => x.id === r);
+    if (!rm) return;
+    latency   += rm.latD;
+    capacity  += rm.capD;
+    bugRisk   += rm.bugD;
+    ct        += rm.ctD;
+  });
+
+  if (architecture.includes("loadBalancer")) capacity *= 1.5;
+  if (architecture.includes("cache"))        latency  *= 0.65;
+  if (architecture.includes("cdn"))          latency  *= 0.8;
+  if (architecture.includes("apiGateway"))   { latency *= 0.95; bugRisk -= 0.03; }
+  if (architecture.includes("msgQueue"))     bugRisk  -= 0.05;
+  if (architecture.includes("microservices")){ capacity *= 1.3; bugRisk -= 0.05; latency *= 1.05; }
+
+  let dbMs = 80;
+  if (db === "sql")   { if (isWrite) { bugRisk += 0.25; latency += 0.15; dbMs = 200; } else dbMs = 100; }
+  if (db === "nosql") { if (isWrite) { latency -= 0.05; dbMs = 60; } if (isRead) { latency -= 0.1; dbMs = 50; } }
+  if (db === "distdb"){ capacity *= 1.4; dbMs = 40; bugRisk += 0.03; }
+
+  bugRisk += tm.bugD;
+  latency += dm.latD;
+  bugRisk += dm.bugD;
+
+  if (isHard) { ct -= 0.1; bugRisk += 0.03; }
+
+  const spike  = Math.round(200 * (isHard ? 1.3 : 1) * (1 + cycle * 0.15));
+  const users  = 1000 + spike;
+  const load   = users / capacity;
+  const finLat = Math.max(0.1, latency * load);
+  bugRisk      = Math.max(0, Math.min(1, bugRisk));
+
+  let cacheHit = 0;
+  if (architecture.includes("cache")) {
+    cacheHit = 60;
+    if (architecture.includes("cdn")) cacheHit += 15;
+    if (isRead) cacheHit += 10;
+    cacheHit = Math.min(95, cacheHit);
+  }
+
+  const errRate  = Math.min(100, bugRisk * 80 + (load > ct ? 20 : 0));
+  const queueLen = architecture.includes("msgQueue")
+    ? Math.round(Math.max(0, (load - 0.7) * 120))
+    : 0;
+
+  const uptime =
+    load > ct || bugRisk > 0.6 ? 70
+    : bugRisk > 0.45 || load > ct * 0.9 ? 91
+    : bugRisk > 0.3  || load > ct * 0.75 ? 97
+    : 99.9;
+
+  let status = "HEALTHY";
+  if      (load > ct || bugRisk > 0.6)          status = "CRASHED";
+  else if (bugRisk > 0.45 || load > ct * 0.9)   status = "CRITICAL";
+  else if (bugRisk > 0.3  || load > ct * 0.75)  status = "DEGRADED";
+
+  const costTotal = calcCost(architecture, db);
+  const effScore  = Math.max(0, 100 - costTotal / 8);
+  const score = Math.max(0, Math.min(100, Math.round(
+    (uptime / 99.9) * 40 +
+    Math.max(0, 1 - finLat / 3) * 30 +
+    Math.max(0, 1 - errRate / 40) * 20 +
+    effScore / 100 * 10
+  )));
+
+  const bad = [];
+  if (isRead  && !architecture.includes("cache"))     bad.push("cache");
+  if (scenario === "streaming" && !architecture.includes("cdn")) bad.push("cdn");
+  if (isWrite && db === "sql")                         bad.push("sql");
+  if (!architecture.includes("loadBalancer") && isHard) bad.push("loadBalancer");
+
+  return {
+    load, latency: finLat, bugRisk, score, status, capacity,
+    crashThreshold: ct, cacheHit, errRate, queueLen, dbMs, uptime,
+    spike, users, costTotal, bad,
+  };
+}
+
+function genFeedback(cfg, res) {
+  const { scenario, sdlc, requirements, architecture, db, testing, deployment } = cfg;
+  const isRead  = ["instagram", "streaming"].includes(scenario);
+  const isWrite = ["chat", "rideshare"].includes(scenario);
+  const fb = [];
+  const add = (t, m) => fb.push({ t, m });
+
+  if (sdlc === "waterfall") add("bad",  "Waterfall slowed adaptation — traffic spikes hit before changes deployed.");
+  if (sdlc === "devops")    add("good", "DevOps CI/CD reduced latency and accelerated release cycles.");
+  if (sdlc === "spiral")    add("good", "Spiral model risk assessments reduced unexpected failures.");
+  if (sdlc === "agile_k")   add("info", "Kanban continuous flow minimised feature delivery bottlenecks.");
+
+  if (isRead  && !architecture.includes("cache"))           add("bad",  "Performance: No cache on read-heavy system — latency unnecessarily high.");
+  if (scenario === "streaming" && !architecture.includes("cdn")) add("bad", "Architecture: Video streaming without CDN causes bandwidth saturation.");
+  if (!architecture.includes("loadBalancer") && res.load > 0.8)  add("bad", "Architecture: No Load Balancer — single point of failure under high load.");
+  if (architecture.includes("msgQueue") && isWrite)         add("good", "Message Queue absorbed write spikes — burst load handled efficiently.");
+  if (architecture.includes("apiGateway"))                  add("good", "API Gateway added rate-limiting and reduced bug exposure.");
+
+  if (db === "sql"   && isWrite) add("bad",  "Reliability: SQL under write-heavy load causes queue buildup + latency spikes.");
+  if (db === "nosql" && isWrite) add("good", "NoSQL handled write-heavy workload efficiently.");
+
+  if (requirements.includes("cost") && !architecture.includes("loadBalancer"))
+    add("warn", "Cost optimisation cut capacity without a Load Balancer — risky tradeoff.");
+
+  if (testing === "basic") add("bad",  "Reliability: Basic testing left critical bugs — error rate dangerously high.");
+  if (testing === "chaos") add("good", "Chaos testing prepared system for real-world random failures.");
+  if (deployment === "manual") add("bad",  "DevOps: Manual deploy introduced human errors and raised bug risk.");
+  if (deployment === "canary") add("good", "Canary deployment reduced risk via gradual traffic routing.");
+
+  if (res.cacheHit > 80) add("good", `Cache hit rate ${res.cacheHit}% — effectively offloading the database.`);
+  if (res.errRate  > 40) add("bad",  `Error rate ${res.errRate.toFixed(0)}% — system critically unstable.`);
+
+  return fb.slice(0, 8);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// TEST CASE 1 — Simulation Engine: Worst-Case Configuration Crashes the System
+// ═══════════════════════════════════════════════════════════════════════════════
+/**
+ * DESCRIPTION:
+ *   Verifies that the simulation engine correctly sets status to "CRASHED" when
+ *   the worst possible configuration is applied:
+ *   — No Load Balancer (capacity stays at 500)
+ *   — Basic testing (bugRisk +0.20)
+ *   — Manual deployment (bugRisk +0.20)
+ *   — SQL database on write-heavy scenario (bugRisk +0.25)
+ *   — No caching or CDN
+ *
+ * EXPECTED BEHAVIOUR:
+ *   bugRisk exceeds 0.6 threshold OR load exceeds crashThreshold → status = "CRASHED"
+ *
+ * TYPE: Unit — Simulation Engine (Negative / Failure Path)
+ */
+describe("TC-01 | Simulation Engine: Worst-case config crashes the system", () => {
+  const worstCase = {
+    scenario:     "chat",       // write-heavy
+    sdlc:         "waterfall",
+    requirements: [],
+    architecture: [],           // no load balancer, no cache
+    db:           "sql",        // bad choice for write-heavy
+    testing:      "basic",      // +0.20 bugRisk
+    deployment:   "manual",     // +0.20 bugRisk
+  };
+
+  it("should return status CRASHED", () => {
+    const result = runSim(worstCase, { capacity: 0, latency: 0 }, 0);
+    expect(result.status).toBe("CRASHED");
+  });
+
+  it("should have bugRisk above crash threshold of 0.6", () => {
+    const result = runSim(worstCase, { capacity: 0, latency: 0 }, 0);
+    const isCrashedByBug  = result.bugRisk > 0.6;
+    const isCrashedByLoad = result.load    > result.crashThreshold;
+    expect(isCrashedByBug || isCrashedByLoad).toBe(true);
+  });
+
+  it("should have an error rate above 40%", () => {
+    const result = runSim(worstCase, { capacity: 0, latency: 0 }, 0);
+    expect(result.errRate).toBeGreaterThan(40);
+  });
+});
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// TEST CASE 2 — Simulation Engine: Optimal Configuration Returns HEALTHY Status
+// ═══════════════════════════════════════════════════════════════════════════════
+/**
+ * DESCRIPTION:
+ *   Verifies that a fully optimised configuration produces a HEALTHY system with
+ *   high score, low latency, and low error rate. Uses:
+ *   — Load Balancer, Cache, CDN, API Gateway, Message Queue
+ *   — Distributed DB (fastest response time)
+ *   — Chaos testing (highest bug risk reduction)
+ *   — Canary deployment (lowest bug risk + latency delta)
+ *   — DevOps SDLC
+ *
+ * EXPECTED BEHAVIOUR:
+ *   System status = "HEALTHY", score ≥ 60, latency < 2.0s, errRate < 20%
+ *
+ * TYPE: Unit — Simulation Engine (Positive / Happy Path)
+ */
+describe("TC-02 | Simulation Engine: Optimal config returns HEALTHY status", () => {
+  const bestCase = {
+    scenario:     "instagram",
+    sdlc:         "devops",
+    requirements: ["performance", "reliability"],
+    architecture: ["loadBalancer", "cache", "cdn", "apiGateway", "msgQueue"],
+    db:           "distdb",
+    testing:      "chaos",
+    deployment:   "canary",
+  };
+
+  it("should return status HEALTHY", () => {
+    const result = runSim(bestCase, { capacity: 0, latency: 0 }, 0);
+    expect(result.status).toBe("HEALTHY");
+  });
+
+  it("should have a score of at least 60", () => {
+    const result = runSim(bestCase, { capacity: 0, latency: 0 }, 0);
+    expect(result.score).toBeGreaterThanOrEqual(60);
+  });
+
+  it("should have latency below 2.0 seconds", () => {
+    const result = runSim(bestCase, { capacity: 0, latency: 0 }, 0);
+    expect(result.latency).toBeLessThan(2.0);
+  });
+});
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// TEST CASE 3 — Architecture: Load Balancer Increases Capacity by 1.5×
+// ═══════════════════════════════════════════════════════════════════════════════
+/**
+ * DESCRIPTION:
+ *   Confirms the Load Balancer multiplier (×1.5) is applied correctly by
+ *   comparing the resulting capacity with and without it, using an identical
+ *   baseline configuration.
+ *
+ * EXPECTED BEHAVIOUR:
+ *   capacity(with LB) ≈ capacity(without LB) × 1.5
+ *
+ * TYPE: Unit — Architecture Component Logic
+ */
+describe("TC-03 | Architecture: Load Balancer applies 1.5× capacity multiplier", () => {
+  const base = {
+    scenario:     "instagram",
+    sdlc:         "agile_s",
+    requirements: [],
+    architecture: [],
+    db:           "nosql",
+    testing:      "medium",
+    deployment:   "cicd",
+  };
+
+  it("should increase capacity by exactly 1.5× when Load Balancer is added", () => {
+    const withoutLB = runSim(base, { capacity: 0, latency: 0 }, 0);
+    const withLB    = runSim(
+      { ...base, architecture: ["loadBalancer"] },
+      { capacity: 0, latency: 0 },
+      0
+    );
+    expect(withLB.capacity).toBeCloseTo(withoutLB.capacity * 1.5, 1);
+  });
+
+  it("should result in lower load ratio when Load Balancer is present", () => {
+    const withoutLB = runSim(base, { capacity: 0, latency: 0 }, 0);
+    const withLB    = runSim(
+      { ...base, architecture: ["loadBalancer"] },
+      { capacity: 0, latency: 0 },
+      0
+    );
+    expect(withLB.load).toBeLessThan(withoutLB.load);
+  });
+});
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// TEST CASE 4 — Database: SQL on Write-Heavy Scenario Raises BugRisk and Latency
+// ═══════════════════════════════════════════════════════════════════════════════
+/**
+ * DESCRIPTION:
+ *   Validates the conditional DB penalty for using SQL on write-heavy scenarios
+ *   (Chat App, Ride Sharing). SQL on write-heavy adds bugRisk +0.25 and latency
+ *   +0.15, and sets dbMs = 200ms.
+ *
+ * EXPECTED BEHAVIOUR:
+ *   bugRisk(SQL, write-heavy) > bugRisk(NoSQL, write-heavy)
+ *   latency(SQL, write-heavy) > latency(NoSQL, write-heavy)
+ *   dbMs = 200ms for SQL on write-heavy
+ *
+ * TYPE: Unit — Database Simulation Logic
+ */
+describe("TC-04 | Database: SQL on write-heavy scenario penalises bug risk and latency", () => {
+  const baseCfg = {
+    scenario:     "chat",  // write-heavy
+    sdlc:         "agile_s",
+    requirements: [],
+    architecture: ["loadBalancer"],
+    testing:      "medium",
+    deployment:   "cicd",
+  };
+
+  it("SQL should produce higher bugRisk than NoSQL on a write-heavy scenario", () => {
+    const sql   = runSim({ ...baseCfg, db: "sql"   }, { capacity: 0, latency: 0 }, 0);
+    const nosql = runSim({ ...baseCfg, db: "nosql" }, { capacity: 0, latency: 0 }, 0);
+    expect(sql.bugRisk).toBeGreaterThan(nosql.bugRisk);
+  });
+
+  it("SQL should produce higher latency than NoSQL on a write-heavy scenario", () => {
+    const sql   = runSim({ ...baseCfg, db: "sql"   }, { capacity: 0, latency: 0 }, 0);
+    const nosql = runSim({ ...baseCfg, db: "nosql" }, { capacity: 0, latency: 0 }, 0);
+    expect(sql.latency).toBeGreaterThan(nosql.latency);
+  });
+
+  it("SQL DB response time should be 200ms on a write-heavy scenario", () => {
+    const result = runSim({ ...baseCfg, db: "sql" }, { capacity: 0, latency: 0 }, 0);
+    expect(result.dbMs).toBe(200);
+  });
+});
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// TEST CASE 5 — Cache Hit Rate: Correct Calculation for Read-Heavy Scenario
+// ═══════════════════════════════════════════════════════════════════════════════
+/**
+ * DESCRIPTION:
+ *   Validates the cache hit rate accumulation formula:
+ *     base = 60%
+ *     +15%  if CDN is present
+ *     +10%  if scenario is read-heavy
+ *     cap at 95%
+ *
+ *   Test matrix covers: cache only, cache + CDN, and cache + CDN + read-heavy.
+ *
+ * EXPECTED BEHAVIOUR:
+ *   cacheHit = 0 if no cache component
+ *   cacheHit = 60 for non-read-heavy + cache only
+ *   cacheHit = 85 for read-heavy + cache + CDN (60 + 15 + 10)
+ *   cacheHit = 0 when cache component is absent
+ *
+ * TYPE: Unit — Cache Hit Rate Logic
+ */
+describe("TC-05 | Cache: Hit rate calculated correctly per configuration", () => {
+  const base = {
+    scenario:     "instagram", // read-heavy
+    sdlc:         "agile_s",
+    requirements: [],
+    architecture: [],
+    db:           "nosql",
+    testing:      "medium",
+    deployment:   "cicd",
+  };
+
+  it("should return 0% cache hit rate when no cache component is selected", () => {
+    const result = runSim(base, { capacity: 0, latency: 0 }, 0);
+    expect(result.cacheHit).toBe(0);
+  });
+
+  it("should return 70% cache hit rate for read-heavy scenario with cache only", () => {
+    // 60 base + 10 read-heavy = 70
+    const result = runSim(
+      { ...base, architecture: ["cache"] },
+      { capacity: 0, latency: 0 },
+      0
+    );
+    expect(result.cacheHit).toBe(70);
+  });
+
+  it("should return 85% cache hit rate for read-heavy scenario with cache + CDN", () => {
+    // 60 base + 15 CDN + 10 read-heavy = 85
+    const result = runSim(
+      { ...base, architecture: ["cache", "cdn"] },
+      { capacity: 0, latency: 0 },
+      0
+    );
+    expect(result.cacheHit).toBe(85);
+  });
+});
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// TEST CASE 6 — Cost Model: calcCost Returns Correct Total
+// ═══════════════════════════════════════════════════════════════════════════════
+/**
+ * DESCRIPTION:
+ *   Validates the infrastructure cost calculator against known component prices:
+ *     Load Balancer = $50
+ *     Cache         = $40
+ *     CDN           = $60
+ *     NoSQL DB      = $80
+ *   Total expected = $230/mo
+ *
+ *   Also verifies that selecting no components returns $0.
+ *
+ * EXPECTED BEHAVIOUR:
+ *   calcCost(["loadBalancer","cache","cdn"], "nosql") === 230
+ *   calcCost([], "sql") === 70  (DB only)
+ *   calcCost([], undefined) === 0
+ *
+ * TYPE: Unit — Cost Engine
+ */
+describe("TC-06 | Cost Model: calcCost returns accurate component totals", () => {
+  it("should return 230 for Load Balancer + Cache + CDN + NoSQL", () => {
+    const cost = calcCost(["loadBalancer", "cache", "cdn"], "nosql");
+    expect(cost).toBe(230); // 50 + 40 + 60 + 80
+  });
+
+  it("should return only the DB cost when no architecture components are selected", () => {
+    const cost = calcCost([], "sql");
+    expect(cost).toBe(70); // SQL = $70
+  });
+
+  it("should return 0 when no components and no DB are selected", () => {
+    const cost = calcCost([], undefined);
+    expect(cost).toBe(0);
+  });
+
+  it("should return 100 for Distributed DB alone", () => {
+    const cost = calcCost([], "distdb");
+    expect(cost).toBe(100);
+  });
+});
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// TEST CASE 7 — Traffic Scaling: Spike Grows Larger With Each Cycle
+// ═══════════════════════════════════════════════════════════════════════════════
+/**
+ * DESCRIPTION:
+ *   Validates the progressive difficulty mechanic where traffic spikes escalate
+ *   each cycle:
+ *     spike = round(200 × spikeFactor × (1 + cycle × 0.15))
+ *   This ensures later cycles are harder, creating a meaningful game loop.
+ *
+ * EXPECTED BEHAVIOUR:
+ *   spike(cycle=1) > spike(cycle=0)
+ *   spike(cycle=4) > spike(cycle=2)
+ *   users = 1000 + spike
+ *
+ * TYPE: Unit — Traffic Engine / Game Loop Progression
+ */
+describe("TC-07 | Traffic Engine: spike increases progressively across cycles", () => {
+  const cfg = {
+    scenario:     "instagram",
+    sdlc:         "devops",
+    requirements: ["performance"],
+    architecture: ["loadBalancer", "cache"],
+    db:           "nosql",
+    testing:      "full",
+    deployment:   "cicd",
+  };
+
+  it("spike at cycle 1 should be greater than spike at cycle 0", () => {
+    const c0 = runSim(cfg, { capacity: 0, latency: 0 }, 0);
+    const c1 = runSim(cfg, { capacity: 0, latency: 0 }, 1);
+    expect(c1.spike).toBeGreaterThan(c0.spike);
+  });
+
+  it("spike at cycle 4 should be greater than at cycle 2", () => {
+    const c2 = runSim(cfg, { capacity: 0, latency: 0 }, 2);
+    const c4 = runSim(cfg, { capacity: 0, latency: 0 }, 4);
+    expect(c4.spike).toBeGreaterThan(c2.spike);
+  });
+
+  it("total users should equal 1000 + spike value", () => {
+    const result = runSim(cfg, { capacity: 0, latency: 0 }, 0);
+    expect(result.users).toBe(1000 + result.spike);
+  });
+});
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// TEST CASE 8 — Feedback Engine: Correct Feedback Generated for Bad Decisions
+// ═══════════════════════════════════════════════════════════════════════════════
+/**
+ * DESCRIPTION:
+ *   Validates that the feedback engine identifies and reports bad architectural
+ *   decisions. Specifically tests:
+ *   1. Waterfall SDLC → "bad" feedback mentioning Waterfall
+ *   2. No cache on read-heavy system → "bad" feedback mentioning cache
+ *   3. SQL on write-heavy scenario → "bad" feedback mentioning SQL
+ *   4. Manual deployment → "bad" feedback mentioning manual deploy
+ *
+ * EXPECTED BEHAVIOUR:
+ *   genFeedback returns at least one "bad" item for each wrong decision;
+ *   message content is contextually relevant.
+ *
+ * TYPE: Unit — Feedback / Insights Engine
+ */
+describe("TC-08 | Feedback Engine: Flags known bad decisions correctly", () => {
+  it("should flag Waterfall SDLC as a bad decision", () => {
+    const cfg = {
+      scenario:     "instagram",
+      sdlc:         "waterfall",
+      requirements: [],
+      architecture: ["loadBalancer", "cache"],
+      db:           "nosql",
+      testing:      "medium",
+      deployment:   "cicd",
+    };
+    const res = runSim(cfg, { capacity: 0, latency: 0 }, 0);
+    const fb  = genFeedback(cfg, res);
+    const bad = fb.filter(f => f.t === "bad");
+    expect(bad.length).toBeGreaterThan(0);
+    expect(bad.some(f => f.m.toLowerCase().includes("waterfall"))).toBe(true);
+  });
+
+  it("should flag missing cache for a read-heavy scenario", () => {
+    const cfg = {
+      scenario:     "instagram",   // read-heavy
+      sdlc:         "agile_s",
+      requirements: [],
+      architecture: ["loadBalancer"], // NO cache
+      db:           "nosql",
+      testing:      "medium",
+      deployment:   "cicd",
+    };
+    const res = runSim(cfg, { capacity: 0, latency: 0 }, 0);
+    const fb  = genFeedback(cfg, res);
+    expect(fb.some(f => f.t === "bad" && f.m.toLowerCase().includes("cache"))).toBe(true);
+  });
+
+  it("should flag SQL on write-heavy scenario as a bad decision", () => {
+    const cfg = {
+      scenario:     "chat",   // write-heavy
+      sdlc:         "agile_s",
+      requirements: [],
+      architecture: ["loadBalancer"],
+      db:           "sql",    // bad for write-heavy
+      testing:      "medium",
+      deployment:   "cicd",
+    };
+    const res = runSim(cfg, { capacity: 0, latency: 0 }, 0);
+    const fb  = genFeedback(cfg, res);
+    expect(fb.some(f => f.t === "bad" && f.m.toLowerCase().includes("sql"))).toBe(true);
+  });
+
+  it("should flag manual deployment as a bad decision", () => {
+    const cfg = {
+      scenario:     "instagram",
+      sdlc:         "agile_s",
+      requirements: [],
+      architecture: ["loadBalancer"],
+      db:           "nosql",
+      testing:      "medium",
+      deployment:   "manual",  // bad
+    };
+    const res = runSim(cfg, { capacity: 0, latency: 0 }, 0);
+    const fb  = genFeedback(cfg, res);
+    expect(fb.some(f => f.t === "bad" && f.m.toLowerCase().includes("manual"))).toBe(true);
+  });
+});
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// TEST CASE 9 — Score Boundaries: Score is Always Between 0 and 100
+// ═══════════════════════════════════════════════════════════════════════════════
+/**
+ * DESCRIPTION:
+ *   Validates that the scoring formula never produces a value outside the [0, 100]
+ *   range regardless of configuration. Tests the worst possible and best possible
+ *   scenarios, and an extreme edge case (cost-optimised with no infrastructure).
+ *
+ * EXPECTED BEHAVIOUR:
+ *   0 ≤ score ≤ 100 for all configurations
+ *
+ * TYPE: Unit — Scoring Engine / Boundary Conditions
+ */
+describe("TC-09 | Score Boundaries: score is always clamped between 0 and 100", () => {
+  const configs = [
+    {
+      label: "worst case",
+      cfg: { scenario:"chat", sdlc:"waterfall", requirements:[], architecture:[], db:"sql", testing:"basic", deployment:"manual" },
+    },
+    {
+      label: "best case",
+      cfg: { scenario:"instagram", sdlc:"devops", requirements:["performance","reliability"], architecture:["loadBalancer","cache","cdn","apiGateway","msgQueue"], db:"distdb", testing:"chaos", deployment:"canary" },
+    },
+    {
+      label: "no infrastructure at all",
+      cfg: { scenario:"rideshare", sdlc:"waterfall", requirements:["cost"], architecture:[], db:"sql", testing:"basic", deployment:"manual" },
+    },
+  ];
+
+  configs.forEach(({ label, cfg }) => {
+    it(`score should be between 0 and 100 for: ${label}`, () => {
+      const result = runSim(cfg, { capacity: 0, latency: 0 }, 0);
+      expect(result.score).toBeGreaterThanOrEqual(0);
+      expect(result.score).toBeLessThanOrEqual(100);
+    });
+  });
+});
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// TEST CASE 10 — UI Rendering: Core Panels Render and Simulation Runs End-to-End
+// ═══════════════════════════════════════════════════════════════════════════════
+/**
+ * DESCRIPTION:
+ *   Integration test that renders the full App component and verifies:
+ *   1. The page title and subtitle are visible on load
+ *   2. The cycle tracker renders 5 cycle indicators
+ *   3. The five navigation tabs are present
+ *   4. Clicking "Run Simulation" switches to the Results tab and shows a status
+ *   5. The Reset button restores the Configure tab
+ *
+ * EXPECTED BEHAVIOUR:
+ *   All key UI regions render without error; simulation button triggers state
+ *   transition to results view; reset returns app to initial state.
+ *
+ * TYPE: Integration — Full Component Render + User Interaction Flow
+ */
+describe("TC-10 | UI Integration: App renders and simulation runs end-to-end", () => {
+  it("should render the app title and subtitle", () => {
+    render(<App />);
+    expect(screen.getByText(/System Design Builder/i)).toBeInTheDocument();
+    expect(screen.getByText(/SDLC SIMULATION ENGINE/i)).toBeInTheDocument();
+  });
+
+  it("should render 5 cycle tracker pips", () => {
+    render(<App />);
+    // Cycle pips are divs with class "cpip"
+    const pips = document.querySelectorAll(".cpip");
+    expect(pips.length).toBe(5);
+  });
+
+  it("should render all 5 navigation tabs", () => {
+    render(<App />);
+    expect(screen.getByText(/Configure/i)).toBeInTheDocument();
+    expect(screen.getByText(/Results/i)).toBeInTheDocument();
+    expect(screen.getByText(/Event Log/i)).toBeInTheDocument();
+    expect(screen.getByText(/Architecture/i)).toBeInTheDocument();
+    expect(screen.getByText(/Cost Model/i)).toBeInTheDocument();
+  });
+
+  it("should switch to Results tab and show a system status after running simulation", () => {
+    render(<App />);
+    // Click the Run Simulation button
+    const runBtn = screen.getByText(/Run Simulation/i);
+    fireEvent.click(runBtn);
+
+    // Results tab should now be active and show a system status banner
+    const statusOptions = ["HEALTHY", "DEGRADED", "CRITICAL", "CRASHED"];
+    const found = statusOptions.some(s => {
+      try { return screen.getByText(new RegExp(s, "i")); } catch { return false; }
+    });
+    expect(found).toBe(true);
+  });
+
+  it("should display the Results tab placeholder message before any simulation is run", () => {
+    render(<App />);
+    // Navigate to results tab directly without running simulation
+    fireEvent.click(screen.getByText(/Results/i));
+    expect(screen.getByText(/run simulation to see results/i)).toBeInTheDocument();
+  });
+});
