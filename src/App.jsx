@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 
 const FONTS = `@import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Rajdhani:wght@400;500;600;700&display=swap');`;
 
@@ -336,7 +336,7 @@ function LogPanel({logs}) {
   const lbl={i:"INFO",w:"WARN",e:"ERROR",r:"RECOVERY"};
   return (
     <div className="log-panel" ref={ref}>
-      {logs.length===0&&<span style={{color:"var(--text3)"}}>// run simulation to see event log</span>}
+      {logs.length===0&&<span style={{color:"var(--text3)"}}>{"// run simulation to see event log"}</span>}
       {logs.map((l,i)=>(
         <div key={i} className={cls[l.t]||"li"}>
           <span className="lts">[{l.s}]</span>
@@ -369,7 +369,7 @@ export default function App() {
   const autoRef = useRef(null);
   const MAX = 5;
 
-  const cfg = {scenario,sdlc,requirements:reqs,architecture:arch,db,testing,deployment:deploy};
+  const cfg = useMemo(()=>({scenario,sdlc,requirements:reqs,architecture:arch,db,testing,deployment:deploy}),[scenario,sdlc,reqs,arch,db,testing,deploy]);
   const toggleReq  = id => setReqs(p=>p.includes(id)?p.filter(x=>x!==id):[...p,id]);
   const toggleArch = id => setArch(p=>p.includes(id)?p.filter(x=>x!==id):[...p,id]);
 
@@ -423,7 +423,7 @@ export default function App() {
             const cl=i<cycles.length?(cycles[i]?"done":"fail"):i===cycles.length?"cur":"";
             return <div key={i} className={`cpip ${cl}`}>{i+1}</div>;
           })}
-          <span className="clbl2">// SURVIVE {MAX} CYCLES TO WIN</span>
+          <span className="clbl2">{"// SURVIVE "}{MAX}{" CYCLES TO WIN"}</span>
         </div>
 
         <div className="tabs">
@@ -435,7 +435,7 @@ export default function App() {
         {/* ── CONFIGURE ─────────────────────────────────────────────── */}
         {tab==="configure"&&<>
           <div className="card">
-            <div className="clabel">01 // Scenario</div>
+            <div className="clabel">{"01 // Scenario"}</div>
             <div className="g5">
               {SCENARIOS.map(s=>(
                 <div key={s.id} className={`sc-card ${scenario===s.id?"sel":""}`} onClick={()=>setScenario(s.id)}>
@@ -453,7 +453,7 @@ export default function App() {
 
           <div className="g2">
             <div className="card">
-              <div className="clabel">02 // SDLC Model</div>
+              <div className="clabel">{"02 // SDLC Model"}</div>
               {SDLC_MODELS.map(m=>(
                 <button key={m.id} className={`btn ${sdlc===m.id?"sel":""}`} onClick={()=>setSdlc(m.id)}>
                   <span className="dot"/><div><div>{m.icon} {m.name}</div><div className="bdesc">{m.desc}</div></div>
@@ -461,7 +461,7 @@ export default function App() {
               ))}
             </div>
             <div className="card">
-              <div className="clabel">03 // Requirements <span style={{color:"var(--text3)",fontSize:".55rem"}}>(multi-select)</span></div>
+              <div className="clabel">{"03 // Requirements"}<span style={{color:"var(--text3)",fontSize:".55rem"}}>(multi-select)</span></div>
               {REQUIREMENTS.map(r=>(
                 <button key={r.id} className={`btn ${reqs.includes(r.id)?"sel":""}`} onClick={()=>toggleReq(r.id)}>
                   <span className="dot"/><div><div>{r.icon} {r.name}</div><div className="bdesc">{r.desc}</div></div>
@@ -471,7 +471,7 @@ export default function App() {
           </div>
 
           <div className="card">
-            <div className="clabel">04 // Architecture Components <span style={{color:"var(--text3)",fontSize:".55rem"}}>(multi-select)</span></div>
+            <div className="clabel">{"04 // Architecture Components"}<span style={{color:"var(--text3)",fontSize:".55rem"}}>(multi-select)</span></div>
             <div className="g4" style={{marginBottom:8}}>
               {ARCH_COMPS.map(a=>{
                 const isBad=result?.bad?.includes(a.id)&&arch.includes(a.id);
@@ -502,7 +502,7 @@ export default function App() {
 
           <div className="g2">
             <div className="card">
-              <div className="clabel">05 // Testing Strategy</div>
+              <div className="clabel">{"05 // Testing Strategy"}</div>
               {TEST_OPTIONS.map(t=>(
                 <button key={t.id} className={`btn ${testing===t.id?"sel":""}`} onClick={()=>setTesting(t.id)}>
                   <span className="dot"/><div><div>{t.icon} {t.name}</div><div className="bdesc">{t.desc}</div></div>
@@ -510,7 +510,7 @@ export default function App() {
               ))}
             </div>
             <div className="card">
-              <div className="clabel">06 // Deployment Strategy</div>
+              <div className="clabel">{"06 // Deployment Strategy"}</div>
               {DEPLOY_OPTIONS.map(d=>(
                 <button key={d.id} className={`btn ${deploy===d.id?"sel":""}`} onClick={()=>setDeploy(d.id)}>
                   <span className="dot"/><div><div>{d.icon} {d.name}</div><div className="bdesc">{d.desc}</div></div>
@@ -520,7 +520,7 @@ export default function App() {
           </div>
 
           <div className="card">
-            <div className="clabel">07 // Scaling Options</div>
+            <div className="clabel">{"07 // Scaling Options"}</div>
             <div className="g3">
               <button className="scale-btn" disabled={gameOver||gameWon} onClick={()=>setScaling(p=>({...p,capacity:p.capacity+150}))}>
                 📡 Scale Servers<br/><span style={{fontSize:".7rem",color:"var(--text3)"}}>+150 cap · +$30/mo</span>
@@ -558,7 +558,7 @@ export default function App() {
         {/* ── RESULTS ───────────────────────────────────────────────── */}
         {tab==="results"&&<>
           {!result
-            ?<div className="card" style={{textAlign:"center",padding:40,color:"var(--text3)",fontFamily:"var(--mono)",fontSize:".78rem"}}>// run simulation to see results</div>
+            ?<div className="card" style={{textAlign:"center",padding:40,color:"var(--text3)",fontFamily:"var(--mono)",fontSize:".78rem"}}>{"// run simulation to see results"}</div>
             :<>
               <div className={`sbanner ${s班}`}>
                 {result.status==="HEALTHY"&&"✓ SYSTEM HEALTHY"}
@@ -592,7 +592,7 @@ export default function App() {
               </div>
 
               <div className="card">
-                <div className="clabel">// System Score</div>
+                <div className="clabel">{"// System Score"}</div>
                 <div style={{display:"flex",alignItems:"center",gap:22,flexWrap:"wrap"}}>
                   <ScoreRing score={result.score}/>
                   <div style={{flex:1,fontFamily:"var(--mono)",fontSize:".68rem",color:"var(--text3)",lineHeight:2.1}}>
@@ -609,7 +609,7 @@ export default function App() {
               </div>
 
               {feedback.length>0&&<div className="card">
-                <div className="clabel">// Smart Feedback Engine</div>
+                <div className="clabel">{"// Smart Feedback Engine"}</div>
                 {feedback.map((f,i)=>(
                   <div key={i} className={`fb fb-${f.t}`}>
                     <span>{f.t==="bad"?"❌":f.t==="good"?"✅":f.t==="warn"?"⚠️":"ℹ️"}</span>{f.m}
@@ -622,14 +622,14 @@ export default function App() {
 
         {/* ── LOGS ──────────────────────────────────────────────────── */}
         {tab==="logs"&&<div className="card">
-          <div className="clabel">// Event Log — Real-time System Events</div>
+          <div className="clabel">{"// Event Log — Real-time System Events"}</div>
           <LogPanel logs={logs}/>
           {logs.length>0&&<button onClick={()=>setLogs([])} style={{marginTop:7,background:"transparent",border:"1px solid var(--border)",color:"var(--text3)",padding:"3px 10px",borderRadius:4,cursor:"pointer",fontFamily:"var(--mono)",fontSize:".62rem"}}>CLEAR</button>}
         </div>}
 
         {/* ── ARCHITECTURE ──────────────────────────────────────────── */}
         {tab==="arch"&&<div className="card">
-          <div className="clabel">// Architecture Preview</div>
+          <div className="clabel">{"// Architecture Preview"}</div>
           <div className="arch-pre" dangerouslySetInnerHTML={{__html:archHtml
             .replace(/<an>/g,'<span class="an">').replace(/<\/an>/g,'</span>')
             .replace(/<ab>/g,'<span class="ab">').replace(/<\/ab>/g,'</span>')
@@ -638,7 +638,7 @@ export default function App() {
 
         {/* ── COSTS ─────────────────────────────────────────────────── */}
         {tab==="costs"&&<div className="card">
-          <div className="clabel">// Cost Model — Monthly Infrastructure</div>
+          <div className="clabel">{"// Cost Model — Monthly Infrastructure"}</div>
           {[...ARCH_COMPS,...DB_OPTIONS].filter(c=>ARCH_COMPS.find(x=>x.id===c.id)?arch.includes(c.id):db===c.id).map(c=>(
             <div key={c.id} className="cost-row"><span>{c.icon} {c.name}</span><span style={{fontFamily:"var(--mono)",color:"var(--cyan)"}}>${c.cost}/mo</span></div>
           ))}
